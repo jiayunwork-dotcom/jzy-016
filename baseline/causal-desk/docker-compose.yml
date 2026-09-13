@@ -1,0 +1,64 @@
+# 因果序落库台 —— 一台 Compose 起全套：
+#   primary   落库台主侧（落库工/对账工/主侧消费，Web 页面）  :4000
+#   replica   消费台只读副本（跨分区滞后/同步超时演练）        :4001
+#
+# 权限说明：容器内业务进程以 node(uid 1000) 运行。入口脚本在
+# root 阶段 chown -R node:node /data 后降权，因此无论是首次
+# 创建的命名卷、早期失败版本遗留的 root 属主卷，还是外部
+# bind mount，node 都写得进 /data/state.json 临时文件。
+services:
+  primary:
+    build: .
+    image: causal-desk
+    container_name: causal-primary
+    command: node src/primary/server.js
+    environment:
+      PORT: "4000"
+      DATA_DIR: /data
+      JWT_SECRET: causal-desk-demo-secret
+      INTERNAL_TOKEN: causal-desk-demo-internal
+      SEED_DEMO: "true"
+      SNAPSHOT_AUTO_MS: "3000"
+    ports:
+      - "4000:4000"
+    volumes:
+      - primary-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  replica:
+    build: .
+    image: causal-desk
+    container_name: causal-replica
+    command: node src/replica/server.js
+    depends_on:
+      primary:
+        condition: service_healthy
+    environment:
+      PORT: "4001"
+      DATA_DIR: /data
+      JWT_SECRET: causal-desk-demo-secret
+      INTERNAL_TOKEN: causal-desk-demo-internal
+      PRIMARY_URL: http://primary:4000
+      SYNC_INTERVAL_MS: "2000"
+      REPLICA_SYNC_TIMEOUT_MS: "1500"
+    ports:
+      - "4001:4001"
+    volumes:
+      - replica-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4001/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  primary-data:
+  replica-data:
