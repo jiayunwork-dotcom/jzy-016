@@ -16,4 +16,5 @@ traces/
 记录/
 .reset-keep-env/
 *.sh
+!baseline/**/docker-entrypoint.sh
 开跑.txt
