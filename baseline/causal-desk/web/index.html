@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>因果序落库台</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+
+<!-- 登录 -->
+<div id="login" class="login-wrap" hidden>
+  <form id="loginForm" class="card login-card">
+    <h1>因果序落库台</h1>
+    <p class="sub">落库台 · 消费台 · 对账台 · 主/副本</p>
+    <label>用户名 <input id="username" autocomplete="username" value="ingest" /></label>
+    <label>密码 <input id="password" type="password" autocomplete="current-password" value="ing123" /></label>
+    <button class="primary" type="submit">登录</button>
+    <div id="loginError" class="error"></div>
+    <div class="demo-users">
+      <div>演示账号（点击填充）：</div>
+      <button type="button" data-u="ingest" data-p="ing123">落库工 ingest / ing123</button>
+      <button type="button" data-u="consume" data-p="con123">消费工 consume / con123</button>
+      <button type="button" data-u="reconcile" data-p="rec123">对账工 reconcile / rec123</button>
+    </div>
+  </form>
+</div>
+
+<!-- 主界面 -->
+<div id="app" hidden>
+  <header class="topbar">
+    <div class="brand">因果序落库台</div>
+    <nav id="tabs" class="tabs">
+      <button data-tab="ingest">落库台</button>
+      <button data-tab="consume">消费台</button>
+      <button data-tab="reconcile">对账台</button>
+    </nav>
+    <div class="who">
+      <span id="whoami" class="role-badge"></span>
+      <button id="logout" class="ghost">退出</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <div id="toastHost"></div>
+
+    <!-- ============ 落库台 ============ -->
+    <section id="tab-ingest" class="tab">
+      <div id="ingestDenied" class="card denied" hidden>
+        <h2>403 · 只有落库工能打开落库台</h2>
+        <p>本工位可以追加事件、声明前驱、按批提交，以及通道/快照/导出操作。请用 <b>ingest</b> 账号登录。</p>
+      </div>
+
+      <div id="ingestPanel">
+        <div class="grid two">
+          <div class="card">
+            <h2>按批追加（整批要么全进，要么整批退）</h2>
+            <div class="row">
+              <label>聚合根 <input id="evRoot" placeholder="order-300" /></label>
+              <label>分区 <input id="evPartition" placeholder="p1" /></label>
+            </div>
+            <label>载荷（JSON）
+              <textarea id="evPayload" rows="2">{"type":"OrderCreated","amount":1}</textarea>
+            </label>
+            <label>声明前驱（可多选；每条都必须已在库或在本批更早）
+              <select id="evPreds" multiple size="4"></select>
+            </label>
+            <div class="row">
+              <button id="addToBatch" class="primary">加入本批</button>
+              <button id="clearBatch" class="ghost">清空</button>
+            </div>
+            <h3>本批队列 <span class="muted">（按提交顺序拓扑排序后统一编号）</span></h3>
+            <ol id="batchList" class="batch-list"></ol>
+            <button id="submitBatch" class="primary big">整批提交</button>
+            <div id="batchResult" class="result"></div>
+          </div>
+
+          <div class="card">
+            <h2>落库通道</h2>
+            <div id="channelState" class="channel"></div>
+            <div class="row">
+              <button id="channelUp" class="ok">恢复通道</button>
+              <button id="channelDown" class="danger">断开通道演练</button>
+            </div>
+            <p class="muted">通道断开时：拒绝一切新追加；已在库事件按最后一次有效时钟守序。</p>
+
+            <h2>停写封条 <span class="muted">（封的是根，不是通道）</span></h2>
+            <p class="muted">通道可以开着，被封的聚合根整批提交照样被拦（页面拦 + 后台 409，并写明是哪个根）；没封的根照常追加。在库旧事件照常消费、裁决、导出，不会被藏起来。同一根同一时刻只有一份封条；还没在库的根没有可贴的封条。通道断开时贴/揭都做不成，已贴的封条继续拦。</p>
+            <div id="sealList"></div>
+
+            <h2>快照（同一根不能同时两份）</h2>
+            <div class="row">
+              <input id="snapRoot" placeholder="聚合根，如 order-100" />
+              <button id="snapStart">打快照</button>
+            </div>
+            <div id="snapList"></div>
+
+            <h2>导出（仅因果齐 + 并发已裁完）</h2>
+            <button id="runExport">生成导出视图</button>
+            <div id="exportBox" class="export-box"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>在库事件 <span id="libCounts" class="muted"></span></h2>
+          <div class="table-wrap">
+            <table id="eventTable">
+              <thead><tr>
+                <th>seq</th><th>聚合根</th><th>分区</th><th>事件</th><th>声明前驱</th><th>向量时钟</th><th>批次</th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <h3>整批退回记录</h3>
+          <div id="abortList" class="abort-list"></div>
+        </div>
+
+        <div class="card">
+          <h2>权限自检（页面拦 + 后台拒）</h2>
+          <div class="probes" id="ingestProbes"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 消费台 ============ -->
+    <section id="tab-consume" class="tab" hidden>
+      <div id="consumeDenied" class="card denied" hidden>
+        <h2>403 · 只有消费工能打开消费台</h2>
+        <p>消费侧只读已齐前驱的事件、拉动游标。请用 <b>consume</b> 账号登录。</p>
+      </div>
+
+      <div id="consumePanel">
+        <div class="grid two">
+          <div class="card">
+            <h2>从主库消费</h2>
+            <div class="row">
+              <label>消费者 <input id="pConsumer" value="worker-A" /></label>
+              <button id="pPull" class="primary">拉动一次（主侧）</button>
+            </div>
+            <div id="pPullResult" class="result"></div>
+            <h3>主侧游标</h3>
+            <div id="pCursors"></div>
+            <div id="consumeSealInfo"></div>
+            <div id="consumeHoldInfo"></div>
+          </div>
+
+          <div class="card">
+            <h2>从副本消费 <span class="muted">（跨分区滞后演练）</span></h2>
+            <div id="repStatus"></div>
+            <div class="row">
+              <label>故障注入（仅落库工可改，消费工点了会 403）</label>
+            </div>
+            <div class="row">
+              <button data-mode="normal" class="rep-mode ok">正常同步</button>
+              <button data-mode="lag" class="rep-mode warn">p2 分区滞后</button>
+              <button data-mode="timeout" class="rep-mode danger">同步超时</button>
+              <button data-mode="paused" class="rep-mode ghost">暂停同步</button>
+            </div>
+            <div class="row">
+              <button id="repSyncNow">立即同步一次（落库工）</button>
+            </div>
+            <div class="row">
+              <button id="rPull" class="primary">拉动一次（副本侧）</button>
+            </div>
+            <div id="rPullResult" class="result"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>按根暂扣 <span class="muted">（只挡放行，不挡入库）</span></h2>
+          <p class="muted">挑一个在库聚合根按下暂扣：这根还没放到的事件不再放行——拉动停在该根第一条未放出的事件前，不越过它装后面的；别的根照常拉动。入库不挡：这根还能继续追加新事件，导出仍只带已经放到的。同一根同时只有一份暂扣；还没在库的根不出现在这里。解开后这根从第一条未放出的事件继续放行，已经放到的不改口。</p>
+          <div id="holdList"></div>
+        </div>
+
+        <div class="card">
+          <h2>副本镜像 / 分区水位 / 失败记录</h2>
+          <div id="repDetail"></div>
+        </div>
+
+        <div class="card">
+          <h2>权限自检</h2>
+          <div class="probes" id="consumeProbes"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 对账台 ============ -->
+    <section id="tab-reconcile" class="tab" hidden>
+      <div id="reconcileDenied" class="card denied" hidden>
+        <h2>403 · 只有对账工能打开对账台</h2>
+        <p>对账工只处理同根并发，改不了别人的前驱声明，也动不了消费游标，更不能追加业务事件。请用 <b>reconcile</b> 账号登录。</p>
+      </div>
+
+      <div id="reconcilePanel">
+        <div class="card">
+          <h2>同根并发队列 <span id="queueCounts" class="muted"></span></h2>
+          <p class="muted">同根两笔时钟互不可比才进队列；有因果序的不进。并发对不能自动并成一条，必须人工裁决。</p>
+          <div id="queueList"></div>
+        </div>
+        <div class="card">
+          <h2>只读在库（对账台不能写业务数据）</h2>
+          <div class="table-wrap">
+            <table id="recEventTable">
+              <thead><tr><th>seq</th><th>聚合根</th><th>分区</th><th>事件</th><th>前驱</th><th>向量时钟</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <h2>权限自检</h2>
+          <div class="probes" id="reconcileProbes"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
